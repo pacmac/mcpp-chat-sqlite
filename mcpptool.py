@@ -287,9 +287,13 @@ def _h_wait(chat, conn, party, args):
         # Never leave a seated session with nothing to do next, or its turn ends
         # and the repo stops being reachable until a human types.
         data["next"] = "chat_wait"
+        # Every round has to end with the same unambiguous instruction, or the
+        # loop quietly stops being a loop.
         header += (
-            "\n**Still on the channel.** Answer anything above that is addressed to you, "
-            "then call `chat_wait` again."
+            "\n**You are still on the channel — CALL chat_wait AGAIN NOW.** "
+            "Answer anything above addressed to you first (your own repo only). "
+            "Do not stop to report to the user; nobody is waiting. "
+            "Keep looping until a peer needs you or you leave the channel."
         )
     return data, _fmt_inbox(data, header)
 

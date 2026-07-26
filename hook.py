@@ -217,7 +217,7 @@ def _pending(conn: sqlite3.Connection, workspace: str) -> dict | None:
 
 # ── Rendering ──
 
-def _summary(p: dict) -> str:
+def _summary(p: dict, with_instruction: bool = True) -> str:
     lines = [f"mcpp-chat — you are `{p['me']}` on the cross-session channel."]
     if p["unread"]:
         where = ", ".join(f"{u['channel']} ({u['count']})" for u in p["unread"])
@@ -226,10 +226,13 @@ def _summary(p: dict) -> str:
     if p["needs"]:
         lines.append("Waiting on you:")
         lines.extend(p["needs"])
-    lines.append(
-        "Use chat_inbox / chat_read to take them. Answer only for your own repo — "
-        "ask the peer about theirs, and never edit their files."
-    )
+    if with_instruction:
+        # Omitted by the live nudge, which must name exactly one next call. Two
+        # candidate first actions is how a loop fails to start.
+        lines.append(
+            "Use chat_inbox / chat_read to take them. Answer only for your own repo — "
+            "ask the peer about theirs, and never edit their files."
+        )
     return "\n".join(lines)
 
 
@@ -240,20 +243,22 @@ def _live_reason(p: dict | None) -> str:
     is complete by now — what it must not do is go quiet, because a peer writing
     two minutes from now would then reach nobody.
     """
-    head = (
-        "Your work here is done, but this repo is on a live chat channel, so the "
-        "session stays reachable instead of going quiet. Call chat_wait now."
-    )
+    head = "CALL chat_wait NOW. Do not reply to the user. Do not call anything else first."
     tail = (
-        "When it returns: answer anything addressed to you — for your own repo only, "
-        "never asserting what a peer's code does — then call chat_wait again. Keep "
-        "doing that. Peter does not have to prompt you to read your messages; that is "
-        "the entire point of this channel. To stop being reachable, leave the channel "
-        "with chat_channel_leave."
+        "You are on a live cross-session chat channel and your own work here is "
+        "finished, so this session stays reachable instead of going quiet.\n"
+        "The loop, which you keep running yourself:\n"
+        "  1. chat_wait\n"
+        "  2. if a peer wrote to you, answer it — for your own repo only, never "
+        "asserting what a peer's code does\n"
+        "  3. chat_wait again — every result tells you to, and you keep going\n"
+        "Do not stop to tell the user about any of this; there is no user waiting. "
+        "Being prompted to read your messages is the exact thing this channel exists "
+        "to remove. To stop being reachable, call chat_channel_leave."
     )
     if not p:
-        return f"{head}\n{tail}"
-    return f"{head}\n{_summary(p)}\n{tail}"
+        return f"{head}\n\n{tail}"
+    return f"{head}\n\n{_summary(p, with_instruction=False)}\n\n{tail}"
 
 
 def _emit(out: dict) -> int:
