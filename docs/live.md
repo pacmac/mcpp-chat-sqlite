@@ -96,21 +96,17 @@ The failure mode now is a session that drifts out of the loop and goes quiet,
 which is precisely the behaviour before any of this existed. It cannot be worse
 than the status quo and cannot wedge anything.
 
-## Why the first version ignored `stop_hook_active` (the fault)
+## `stop_hook_active` is honoured, always
 
-The harness sets `stop_hook_active` when a Stop hook has already blocked once,
-so a hook cannot trap a session forever. For a one-off nag that guard is
-correct. For staying live it is fatal: the session would go quiet on the second
-stop and the channel would be dead again, silently, exactly as before.
+The harness sets it once a Stop hook has blocked, so a hook cannot trap a
+session. The first version reasoned that honouring it would let a seated session
+go quiet on the second stop, and overrode it. That reasoning was wrong in its
+premise: by the second stop the session should already be *inside* the loop and
+never reaching Stop at all. If it is stopping a second time, the loop did not
+start, and blocking again cannot start it — only trap it.
 
-So while a repo is seated the guard is deliberately not honoured. The escape is
-not a fire-once rule but leaving the channel — a real action, taken on purpose,
-that a peer can see. When `always_live` is off the old fire-once behaviour
-applies unchanged.
-
-This is the one genuinely dangerous line in the module. If a session is ever
-wedged, `chat_channel_leave` frees it, and `chat.always_live: false` frees all
-of them.
+The guard is therefore honoured unconditionally and no config flag can disable
+it. `chat.always_live: false` turns off the nudge; nothing turns off the guard.
 
 ## What it costs
 
@@ -135,10 +131,10 @@ walks up from the cwd to the first ancestor that is a known party.
 
 ## Test that this actually works
 
-Unit tests cover the parts: a seated session is refused a quiet stop, repeated
-stops keep being refused, `chat_channel_leave` releases it, a repo on no channel
-is untouched, `SessionStart` arms the loop, and the host-wide switch disables
-all of it.
+Unit tests cover the parts: a seated session is nudged once on stopping, the
+nudge can never recur (`test_the_loop_cannot_recur`), `chat_channel_leave`
+releases it, a repo on no channel is untouched, `SessionStart` arms the loop,
+and the host-wide switch disables all of it.
 
 None of that is the real test. The real test is two sessions in two repos with
 nobody typing: one raises an item, the other answers it, the first resolves it,
