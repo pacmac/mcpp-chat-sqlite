@@ -185,7 +185,10 @@ def test_initialize_reports_success(tool):
 
 # ── Always live ──
 
-def test_wait_always_points_a_seated_session_back_at_itself(tool, repos, channel):
+def test_wait_always_points_a_seated_session_back_at_itself(tool, repos, channel, monkeypatch, tmp_path):
+    cfg = tmp_path / "live.yaml"
+    cfg.write_text("chat:\n  always_live: true\n", encoding="utf-8")
+    monkeypatch.setenv("MCPP_CHAT_CONFIG", str(cfg))
     gw, _dash = repos
     out = call(tool, "chat_wait", {"seconds": 1}, gw)
     assert out["result"]["arrived"] is False

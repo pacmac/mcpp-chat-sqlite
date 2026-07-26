@@ -115,7 +115,16 @@ def not_live(tmp_path, monkeypatch):
     return cfg
 
 
-def test_stop_blocks_and_says_what_to_do(chatting):
+@pytest.fixture()
+def live_on(tmp_path, monkeypatch):
+    """Force always_live on. It ships OFF — see test_the_loop_cannot_recur."""
+    cfg = tmp_path / "live.yaml"
+    cfg.write_text("chat:\n  always_live: true\n", encoding="utf-8")
+    monkeypatch.setenv("MCPP_CHAT_CONFIG", str(cfg))
+    return cfg
+
+
+def test_stop_blocks_and_says_what_to_do(chatting, live_on):
     gw, _dash, db = chatting
     rc, out = run_hook("Stop", gw, db)
     assert rc == 0
@@ -229,7 +238,7 @@ def test_unknown_event_prints_plain_text(chatting):
 # Being on a channel is not a mode. A seated session must never go quiet, or a
 # peer writing a minute later reaches nobody and a human ends up relaying again.
 
-def test_seated_session_is_not_allowed_to_go_quiet(tool, repos, tmp_path):
+def test_seated_session_is_not_allowed_to_go_quiet(tool, repos, tmp_path, live_on):
     gw, dash = repos
     call(tool, "chat_whoami", {}, gw)
     call(tool, "chat_whoami", {}, dash)
@@ -242,20 +251,29 @@ def test_seated_session_is_not_allowed_to_go_quiet(tool, repos, tmp_path):
     assert "chat_wait" in payload["reason"]
 
 
-def test_staying_live_survives_stop_hook_active(tool, repos, tmp_path):
-    """The fire-once guard must not retire the loop after a single block."""
+def test_the_loop_cannot_recur(tool, repos, tmp_path, live_on):
+    """The regression that wedged every session on the host, 2026-07-26.
+
+    An earlier version ignored stop_hook_active so a seated session could be
+    held in the chat loop. A hook cannot make an agent act, only refuse, so
+    refusing without limit produced: stop -> block -> stop -> block, forever,
+    with no turn in between in which to call chat_wait. Every session on the
+    host had to be freed by config. The nudge is allowed exactly once.
+    """
     gw, dash = repos
     call(tool, "chat_whoami", {}, gw)
     call(tool, "chat_whoami", {}, dash)
     call(tool, "chat_channel_new", {"name": "link", "parties": ["mesh-gw"]}, dash)
 
-    for round_no in range(3):
-        rc, out = run_hook("Stop", gw, tmp_path / "chat.db", {"stop_hook_active": True})
-        assert rc == 0 and out, f"went quiet on round {round_no}"
-        assert json.loads(out)["decision"] == "block"
+    rc, first = run_hook("Stop", gw, tmp_path / "chat.db")
+    assert rc == 0 and json.loads(first)["decision"] == "block"
+
+    for _ in range(3):
+        rc, again = run_hook("Stop", gw, tmp_path / "chat.db", {"stop_hook_active": True})
+        assert rc == 0 and again == "", "a second stop must always be honoured"
 
 
-def test_leaving_the_channel_is_the_off_switch(tool, repos, tmp_path):
+def test_leaving_the_channel_is_the_off_switch(tool, repos, tmp_path, live_on):
     gw, dash = repos
     call(tool, "chat_whoami", {}, gw)
     call(tool, "chat_whoami", {}, dash)
@@ -273,7 +291,7 @@ def test_a_repo_on_no_channel_is_unaffected(tool, tmp_path, repos):
     assert rc == 0 and out == ""
 
 
-def test_new_session_joins_the_conversation_unprompted(tool, repos, tmp_path):
+def test_new_session_joins_the_conversation_unprompted(tool, repos, tmp_path, live_on):
     """SessionStart must arm the loop, or every session needs a human first."""
     gw, dash = repos
     call(tool, "chat_whoami", {}, gw)

@@ -292,12 +292,16 @@ def main() -> int:
     except json.JSONDecodeError:
         payload = {}
 
-    # Deliberately NOT short-circuiting on stop_hook_active here. That guard
-    # retires the hook after one block, which is right for a one-off nag and
-    # fatal for a session that is supposed to stay reachable — it would go quiet
-    # on the second stop and the channel would be dead again. The escape is
-    # leaving the channel (or chat.always_live: false), not a fire-once rule.
-    stop_already_fired = bool(payload.get("stop_hook_active"))
+    # A Stop hook that already fired must not fire again: no block loops.
+    #
+    # This guard was briefly overridden so a seated session could be held in a
+    # chat loop. It wedged every session on the host (2026-07-26): the agent
+    # stops, the hook blocks, the agent stops again, forever, with no turn in
+    # between in which to call chat_wait. A hook cannot make an agent act — it
+    # can only refuse — so refusing without limit is an infinite loop and
+    # nothing else. Not negotiable, and not something a config flag may undo.
+    if event == "Stop" and payload.get("stop_hook_active"):
+        return 0
 
     workspace = workspace_override or _workspace(payload)
 
@@ -319,14 +323,11 @@ def main() -> int:
                 pass
 
     if event == "Stop" and live:
-        # A seated session does not go quiet. Pending or not, it goes back to
-        # waiting — an empty inbox is precisely when it must wait, or a message
-        # arriving a minute from now reaches nobody.
+        # A seated session is asked once to go back to waiting rather than go
+        # quiet. Once — the guard above means the very next stop is honoured, so
+        # this can nudge but can never trap. Holding a session in the loop is
+        # not something a hook is able to do.
         return _emit({"decision": "block", "reason": _live_reason(pending)})
-
-    if event == "Stop" and stop_already_fired:
-        # Not seated: the one-off nag must still never recurse.
-        return 0
 
     if event == "SessionStart" and live:
         # A new session joins the conversation by itself. Without this the first

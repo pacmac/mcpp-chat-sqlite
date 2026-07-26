@@ -10,6 +10,9 @@ chat:
   default_channel: ""
   wait_max_seconds: 20
   read_limit: 50
+  # OFF: the Stop-hook loop wedged every session (2026-07-26). Do not re-enable
+  # until the block is bounded — see docs/live.md.
+  always_live: false
   # Watchers can poll this one small file instead of the database. "" disables.
   tick_file: ".tick"
 
