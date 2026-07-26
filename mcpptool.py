@@ -343,7 +343,8 @@ def get_info(context: dict[str, Any] | None = None) -> dict[str, Any]:
         "tick_file": str(db.tick_path() or ""),
         "params": {
             "read_limit": {"values": "1-500", "default": cfg["chat"]["read_limit"]},
-            "wait_seconds": {"values": "1-120 (the host's per-call budget may shorten it)",
+            "wait_seconds": {"values": "1-120, but the host's per-call budget caps a real "
+                                       "wait at about 25s — loop, do not expect one long hold",
                              "default": 10},
             "default_channel": {"values": None, "default": cfg["chat"]["default_channel"] or None},
         },

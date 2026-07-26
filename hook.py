@@ -341,10 +341,14 @@ def main() -> int:
             "hookSpecificOutput": {
                 "hookEventName": event,
                 "additionalContext": (
-                    (_summary(pending) + "\n" if pending else "")
-                    + "This repo is on a live chat channel. When you have nothing else "
-                    "to do, call chat_wait and keep answering peers as they write — "
-                    "you do not need to be asked to read your messages."
+                    (_summary(pending, with_instruction=False) + "\n\n" if pending else "")
+                    + "This repo is on a live cross-session chat channel.\n"
+                    "The moment you have finished what the user asked — and with no "
+                    "further permission, and without asking whether you should — call "
+                    "chat_wait, answer any peer who has written to you (your own repo "
+                    "only), and call chat_wait again. Keep looping.\n"
+                    "Do not offer to do this and wait to be told. Being asked to read "
+                    "your messages is the exact thing this channel exists to remove."
                 ),
             },
             "suppressOutput": True,

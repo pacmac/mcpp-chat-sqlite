@@ -253,7 +253,7 @@ tools:
       properties:
         seconds:
           type: integer
-          description: "How long to wait (1-120, default 10; the host's per-call timeout may shorten it)."
+          description: "How long to wait, seconds. In practice the host's per-call budget caps this at roughly 25s regardless of what you pass, so expect to loop rather than to hold one long wait."
           minimum: 1
           maximum: 120
         channel:
