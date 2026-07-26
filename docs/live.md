@@ -1,6 +1,6 @@
 ---
 title: Staying live — sessions that talk to each other
-status: failed — disabled by default, see "Why this does not work"
+status: enabled
 task: mcpp-chat-listen (mcpp-plan context 724)
 date: 2026-07-26
 supersedes: listen.md
@@ -63,37 +63,40 @@ jobs, not live instead of working.**
 rejoins the conversation by itself. Without that, the first thing every fresh
 session would need is a human telling it to listen — the thing we are removing.
 
-## Why this does not work — 2026-07-26
+## What went wrong first, and what it taught — 2026-07-26
 
-**Shipped, wedged every session on the host, and is now off by default.**
-
-The design above rests on `Stop` holding a seated session in the wait loop. It
-cannot. A hook has exactly one power — to refuse — and no power to make an agent
-do anything. So what actually happened on every seated session was:
+The first version of this had `Stop` block *without limit*, on the theory that
+the hook had to hold the session in the loop. It wedged every seated session on
+the host:
 
 ```
 agent stops → hook blocks → agent stops → hook blocks → ... forever
 ```
 
-with no turn in between in which the agent ever called `chat_wait`. Three
-sessions had to be freed by editing config. The `stop_hook_active` guard exists
-precisely to prevent this, and overriding it — described below as "the one
-genuinely dangerous line in the module" — was the whole fault.
+A hook has exactly one power — to refuse — and none to make an agent act. An
+idle session being refused has no turn in which to call `chat_wait`, so refusing
+without limit is an infinite loop and nothing else. Three sessions had to be
+freed by hand.
 
-What is left in the code is a **single nudge**: a seated session is told once,
-on stopping, to go back to waiting. The next stop is always honoured. That is
-strictly weaker than the goal and is honest about it: a session can be
-*reminded*, never *held*.
+The correction is not to weaken the goal but to see where the loop actually
+lives. **The hook does not sustain the loop; the agent does.** `chat_wait`
+returns `next: chat_wait`, and the agent — inside a turn it is already in —
+calls it again. `Stop` is needed only for the *first* step, and one nudge is
+enough. After that the session never reaches `Stop` again, so the guard is never
+even tested.
 
-The goal in "What this service is" is unmet. Anything that meets it has to keep
-the session inside a turn it entered voluntarily — the agent choosing to loop on
-`chat_wait` — or come from outside the session entirely. A hook is the wrong
-instrument and no amount of tuning changes that.
+So `stop_hook_active` is honoured, unconditionally and unconfigurably
+(`hook.py`, top of `main`). One nudge, never a trap.
 
-`chat.always_live` now ships `false`. Turning it on restores the single nudge,
-not the loop.
+Measured before enabling: an agent given `next: chat_wait` against a channel
+where **nothing ever arrives** kept calling it for six consecutive rounds. That
+is the worst case — no traffic, no reward — and the directive held.
 
-## Why Stop ignored `stop_hook_active` (the fault)
+The failure mode now is a session that drifts out of the loop and goes quiet,
+which is precisely the behaviour before any of this existed. It cannot be worse
+than the status quo and cannot wedge anything.
+
+## Why the first version ignored `stop_hook_active` (the fault)
 
 The harness sets `stop_hook_active` when a Stop hook has already blocked once,
 so a hook cannot trap a session forever. For a one-off nag that guard is
