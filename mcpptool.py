@@ -261,7 +261,8 @@ def _h_wait(chat, conn, party, args):
     config, _db, _chat = _pkg()
     cfg = config.get_config().get("chat", {})
     hard_max = int(cfg.get("wait_max_seconds", 20) or 20)
-    # Stay clear of the host's per-call SIGALRM budget.
+    # Stay clear of the host's per-call SIGALRM budget. This, not the config
+    # value, is what really bounds a poll — a long-poll cannot outlive the call.
     try:
         host_budget = int(os.environ.get("MCPP_TIMEOUT_SECONDS", "30")) - 5
     except ValueError:
@@ -279,7 +280,17 @@ def _h_wait(chat, conn, party, args):
     data = chat.inbox(conn, party)
     data["waited_seconds"] = round(seconds if not arrived else max(0.0, seconds - (deadline - time.monotonic())), 1)
     data["arrived"] = arrived
+
     header = "**Something arrived.**" if arrived else f"**Nothing arrived in {seconds}s.**"
+
+    if chat.is_live(conn, party):
+        # Never leave a seated session with nothing to do next, or its turn ends
+        # and the repo stops being reachable until a human types.
+        data["next"] = "chat_wait"
+        header += (
+            "\n**Still on the channel.** Answer anything above that is addressed to you, "
+            "then call `chat_wait` again."
+        )
     return data, _fmt_inbox(data, header)
 
 
@@ -328,7 +339,8 @@ def get_info(context: dict[str, Any] | None = None) -> dict[str, Any]:
         "tick_file": str(db.tick_path() or ""),
         "params": {
             "read_limit": {"values": "1-500", "default": cfg["chat"]["read_limit"]},
-            "wait_seconds": {"values": "1-20", "default": 10},
+            "wait_seconds": {"values": "1-120 (the host's per-call budget may shorten it)",
+                             "default": 10},
             "default_channel": {"values": None, "default": cfg["chat"]["default_channel"] or None},
         },
         "protocol": [

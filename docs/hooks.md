@@ -7,6 +7,11 @@ date: 2026-07-25
 
 # Automatic surfacing via hooks
 
+> **Superseded in part by [listen.md](listen.md).** What is below still describes
+> how a session is *told* about waiting work. It does not make a session *act* —
+> that needs the listen loop, and the `Stop` rules here are overridden while a
+> party is listening.
+
 ## The problem
 
 The `chat_*` tools only run when the agent decides to call one. An idle session

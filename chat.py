@@ -97,6 +97,40 @@ def party_by_name(conn: sqlite3.Connection, name: str) -> Optional[dict]:
     return _row(conn.execute("SELECT * FROM parties WHERE name = ?", (name.strip().lower(),)).fetchone())
 
 
+def party_for_path(conn: sqlite3.Connection, some_path: str) -> Optional[dict]:
+    """The party owning `some_path`, walking up to the first known ancestor.
+
+    A session's cwd moves during a turn, so an exact match on workspace_path
+    misses any party whose session has stepped into a subdirectory. Read-only:
+    unlike party_for() this never creates a party, because a stray path must not
+    mint one.
+    """
+    try:
+        here = Path(some_path).expanduser().resolve()
+    except OSError:
+        return None
+    for candidate in (here, *here.parents):
+        row = conn.execute(
+            "SELECT * FROM parties WHERE workspace_path = ?", (str(candidate),)
+        ).fetchone()
+        if row is not None:
+            return dict(row)
+    return None
+
+
+# ── Being live ──
+#
+# A session seated in an open channel is reachable by its peers. It is not a
+# mode and there is nothing to switch on: joining a channel is the opt-in, and
+# chat_channel_leave is the only opt-out.
+
+def is_live(conn: sqlite3.Connection, party: dict) -> bool:
+    """True when this repo is seated in at least one open channel."""
+    if not bool(get_config().get("chat", {}).get("always_live", True)):
+        return False
+    return bool(my_channels(conn, int(party["id"])))
+
+
 # ── Channels ──
 
 def _channel_by_name(conn: sqlite3.Connection, name: str) -> Optional[dict]:
@@ -756,6 +790,7 @@ def inbox(conn: sqlite3.Connection, party: dict) -> dict:
         "channels": channels_out,
         "waiting_on_me": needs_me,
         "waiting_on_peer": needs_peer,
+        "live": bool(channels_out),
     }
 
 
@@ -797,6 +832,7 @@ def whoami(conn: sqlite3.Connection, party: dict) -> dict:
         "channels": box["channels"],
         "unread_total": box["unread_total"],
         "waiting_on_me": len(box["waiting_on_me"]),
+        "live": box["live"],
         "known_parties": [
             {"name": r["name"], "workspace": r["workspace_path"], "about": r["about"]}
             for r in conn.execute(

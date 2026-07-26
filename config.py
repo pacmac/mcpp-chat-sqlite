@@ -27,8 +27,15 @@ DEFAULTS: dict[str, Any] = {
     "chat": {
         # Used when a party belongs to more than one channel and omits `channel`.
         "default_channel": "",
-        "wait_max_seconds": 20,
+        # Effective wait is still clamped by the host's per-call budget
+        # (MCPP_TIMEOUT_SECONDS), so raising this alone does not lengthen a poll.
+        "wait_max_seconds": 120,
         "read_limit": 50,
+        # A session seated in an open channel stays reachable: when it would go
+        # quiet it waits for peers instead. This is what the module is for, so
+        # it is on. Set false to disable host-wide if it ever misbehaves —
+        # the per-repo off switch is chat_channel_leave.
+        "always_live": True,
         # Relative to the module dir. "" disables the tick file.
         "tick_file": ".tick",
     },

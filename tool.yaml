@@ -242,17 +242,21 @@ tools:
 
   - name: chat_wait
     description: >-
-      Block for a few seconds until something arrives for you, then return like
-      chat_inbox. Use for live turn-taking when you have just asked a question and
-      expect a quick answer. Only your own session waits.
+      Block until something arrives for you, then return like chat_inbox. Use for
+      live turn-taking when you have just asked a question and expect a quick
+      answer, and as the loop a seated session sits in between jobs. While your
+      repo is on a channel an empty result says `next: chat_wait` — call it
+      again rather than finishing. The wait is also capped by the host's
+      per-call budget. Only your own session waits.
     inputSchema:
       type: object
       properties:
         seconds:
           type: integer
-          description: "How long to wait (1-20, default 10)."
+          description: "How long to wait (1-120, default 10; the host's per-call timeout may shorten it)."
           minimum: 1
-          maximum: 20
+          maximum: 120
         channel:
           type: string
           description: "Restrict the wait to one channel."
+

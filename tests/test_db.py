@@ -24,7 +24,7 @@ def test_ensure_schema_is_idempotent(mods, conn):
     _config, db, _chat = mods
     db.ensure_schema(conn)
     db.ensure_schema(conn)
-    assert db.get_schema_version(conn) == 1
+    assert db.get_schema_version(conn) == db.SCHEMA_VERSION
 
 
 def test_db_path_follows_env(mods, tmp_path, monkeypatch):

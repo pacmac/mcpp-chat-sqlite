@@ -102,6 +102,19 @@ def test_user_prompt_submit_uses_its_own_event_name(chatting):
     assert json.loads(out)["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
 
 
+@pytest.fixture()
+def not_live(tmp_path, monkeypatch):
+    """Disable always-live, leaving only the older 'a peer is stuck' nag rule.
+
+    That rule still exists and still has to be right — it is what runs when a
+    host turns staying-live off — so its tests keep running against it.
+    """
+    cfg = tmp_path / "quiet.yaml"
+    cfg.write_text("chat:\n  always_live: false\n", encoding="utf-8")
+    monkeypatch.setenv("MCPP_CHAT_CONFIG", str(cfg))
+    return cfg
+
+
 def test_stop_blocks_and_says_what_to_do(chatting):
     gw, _dash, db = chatting
     rc, out = run_hook("Stop", gw, db)
@@ -109,11 +122,11 @@ def test_stop_blocks_and_says_what_to_do(chatting):
     data = json.loads(out)
     assert data["decision"] == "block"
     assert "chunk-api" in data["reason"]
-    assert "chat_inbox" in data["reason"] and "chat_ack" in data["reason"]
+    assert "chat_wait" in data["reason"]
     assert "own repo" in data["reason"]
 
 
-def test_stop_does_not_block_twice(chatting):
+def test_stop_does_not_block_twice_when_not_staying_live(chatting, not_live):
     gw, _dash, db = chatting
     rc, out = run_hook("Stop", gw, db, payload={"stop_hook_active": True})
     assert rc == 0 and out == ""
@@ -136,14 +149,14 @@ def test_hook_writes_nothing_at_all(tool, chatting):
     assert db.read_bytes() == before
 
 
-def test_author_is_not_told_to_ack_their_own_item(chatting):
+def test_author_is_not_told_to_ack_their_own_item(chatting, not_live):
     _gw, dash, db = chatting
     rc, out = run_hook("Stop", dash, db)
     # node-dash raised it, so nothing is waiting on node-dash yet.
     assert rc == 0 and out == ""
 
 
-def test_prune_ok_is_reported_but_does_not_block(tool, chatting):
+def test_prune_ok_is_reported_but_does_not_block(tool, chatting, not_live):
     """Housekeeping shows up in context; it must not hold a turn open."""
     gw, dash, db = chatting
     call(tool, "chat_ack", {"item": "chunk-api"}, gw)
@@ -159,7 +172,7 @@ def test_prune_ok_is_reported_but_does_not_block(tool, chatting):
     assert "prune-ok" in ctx                            # still visible
 
 
-def test_parked_item_awaiting_my_resolve_never_blocks(tool, chatting):
+def test_parked_item_awaiting_my_resolve_never_blocks(tool, chatting, not_live):
     """The reported bug: an answered item held open on purpose must not nag.
 
     node-dash raised it, mesh-gw answered, and node-dash is deliberately waiting
@@ -179,7 +192,7 @@ def test_parked_item_awaiting_my_resolve_never_blocks(tool, chatting):
     assert "resolve when you are satisfied" in ctx
 
 
-def test_event_only_unread_does_not_block(tool, chatting):
+def test_event_only_unread_does_not_block(tool, chatting, not_live):
     """A peer's ack is news; it must not cost the raiser a turn."""
     gw, dash, db = chatting
     call(tool, "chat_read", {}, dash)
@@ -192,7 +205,7 @@ def test_event_only_unread_does_not_block(tool, chatting):
     assert "acked by mesh-gw" in json.loads(start_out)["hookSpecificOutput"]["additionalContext"]
 
 
-def test_real_message_still_blocks(tool, chatting):
+def test_real_message_still_blocks(tool, chatting, not_live):
     """The narrowing must not silence an actual question."""
     gw, dash, db = chatting
     call(tool, "chat_read", {}, dash)
@@ -209,3 +222,78 @@ def test_unknown_event_prints_plain_text(chatting):
     gw, _dash, db = chatting
     rc, out = run_hook("SomethingElse", gw, db)
     assert rc == 0 and "chunk-api" in out and not out.startswith("{")
+
+
+# ── Always live ──
+#
+# Being on a channel is not a mode. A seated session must never go quiet, or a
+# peer writing a minute later reaches nobody and a human ends up relaying again.
+
+def test_seated_session_is_not_allowed_to_go_quiet(tool, repos, tmp_path):
+    gw, dash = repos
+    call(tool, "chat_whoami", {}, gw)
+    call(tool, "chat_whoami", {}, dash)
+    call(tool, "chat_channel_new", {"name": "link", "parties": ["mesh-gw"]}, dash)
+
+    rc, out = run_hook("Stop", gw, tmp_path / "chat.db")
+    assert rc == 0
+    payload = json.loads(out)
+    assert payload["decision"] == "block", "an empty inbox is exactly when it must wait"
+    assert "chat_wait" in payload["reason"]
+
+
+def test_staying_live_survives_stop_hook_active(tool, repos, tmp_path):
+    """The fire-once guard must not retire the loop after a single block."""
+    gw, dash = repos
+    call(tool, "chat_whoami", {}, gw)
+    call(tool, "chat_whoami", {}, dash)
+    call(tool, "chat_channel_new", {"name": "link", "parties": ["mesh-gw"]}, dash)
+
+    for round_no in range(3):
+        rc, out = run_hook("Stop", gw, tmp_path / "chat.db", {"stop_hook_active": True})
+        assert rc == 0 and out, f"went quiet on round {round_no}"
+        assert json.loads(out)["decision"] == "block"
+
+
+def test_leaving_the_channel_is_the_off_switch(tool, repos, tmp_path):
+    gw, dash = repos
+    call(tool, "chat_whoami", {}, gw)
+    call(tool, "chat_whoami", {}, dash)
+    call(tool, "chat_channel_new", {"name": "link", "parties": ["mesh-gw"]}, dash)
+    call(tool, "chat_channel_leave", {"name": "link"}, gw)
+
+    rc, out = run_hook("Stop", gw, tmp_path / "chat.db")
+    assert rc == 0 and out == "", "a repo that has left must be able to finish"
+
+
+def test_a_repo_on_no_channel_is_unaffected(tool, tmp_path, repos):
+    gw, _dash = repos
+    call(tool, "chat_whoami", {}, gw)          # a party, but seated nowhere
+    rc, out = run_hook("Stop", gw, tmp_path / "chat.db")
+    assert rc == 0 and out == ""
+
+
+def test_new_session_joins_the_conversation_unprompted(tool, repos, tmp_path):
+    """SessionStart must arm the loop, or every session needs a human first."""
+    gw, dash = repos
+    call(tool, "chat_whoami", {}, gw)
+    call(tool, "chat_whoami", {}, dash)
+    call(tool, "chat_channel_new", {"name": "link", "parties": ["mesh-gw"]}, dash)
+
+    rc, out = run_hook("SessionStart", gw, tmp_path / "chat.db")
+    assert rc == 0 and out
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "chat_wait" in ctx
+
+
+def test_host_wide_off_switch(tool, repos, tmp_path, monkeypatch):
+    gw, dash = repos
+    call(tool, "chat_whoami", {}, gw)
+    call(tool, "chat_whoami", {}, dash)
+    call(tool, "chat_channel_new", {"name": "link", "parties": ["mesh-gw"]}, dash)
+
+    cfg = tmp_path / "off.yaml"
+    cfg.write_text("chat:\n  always_live: false\n", encoding="utf-8")
+    monkeypatch.setenv("MCPP_CHAT_CONFIG", str(cfg))
+    rc, out = run_hook("Stop", gw, tmp_path / "chat.db")
+    assert rc == 0 and out == ""

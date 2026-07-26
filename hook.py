@@ -23,6 +23,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 _DIR = Path(__file__).resolve().parent
@@ -78,11 +79,60 @@ def _workspace(payload: dict) -> str:
     return os.getcwd()
 
 
+def _party(conn: sqlite3.Connection, workspace: str) -> sqlite3.Row | None:
+    """The party owning this path, walking up to the first known ancestor.
+
+    A session's cwd moves during a turn — an exact match misses any session that
+    has stepped into a subdirectory of its own repo, which is most of them.
+    """
+    try:
+        here = Path(workspace).expanduser().resolve()
+    except OSError:
+        return None
+    for candidate in (here, *here.parents):
+        row = conn.execute(
+            "SELECT * FROM parties WHERE workspace_path = ?", (str(candidate),)
+        ).fetchone()
+        if row is not None:
+            return row
+    return None
+
+
+def _always_live() -> bool:
+    """Host-wide off switch, for when this misbehaves. Default on."""
+    try:
+        import yaml
+        cfg_file = Path(os.environ.get("MCPP_CHAT_CONFIG", "").strip() or (_DIR / "config.yaml"))
+        if cfg_file.exists():
+            loaded = yaml.safe_load(cfg_file.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                value = loaded.get("chat", {}).get("always_live")
+                if value is not None:
+                    return bool(value)
+    except Exception:
+        pass
+    return True
+
+
+def _is_live(conn: sqlite3.Connection, row: sqlite3.Row | None) -> bool:
+    """True when this repo is seated in an open channel — i.e. reachable.
+
+    Being live is not a mode. Joining a channel is the only opt-in and
+    chat_channel_leave is the only opt-out.
+    """
+    if row is None or not _always_live():
+        return False
+    seated = conn.execute(
+        "SELECT 1 FROM channel_parties cp JOIN channels c ON c.id = cp.channel_id "
+        "WHERE cp.party_id = ? AND cp.left_at IS NULL AND c.is_closed = 0 LIMIT 1",
+        (int(row["id"]),),
+    ).fetchone()
+    return seated is not None
+
+
 def _pending(conn: sqlite3.Connection, workspace: str) -> dict | None:
     """Everything waiting for this repo, or None when there is nothing to say."""
-    me = conn.execute(
-        "SELECT id, name FROM parties WHERE workspace_path = ?", (workspace,)
-    ).fetchone()
+    me = _party(conn, workspace)
     if me is None:
         return None  # this repo has never used chat: nothing to report
 
@@ -183,6 +233,34 @@ def _summary(p: dict) -> str:
     return "\n".join(lines)
 
 
+def _live_reason(p: dict | None) -> str:
+    """Sent back into a seated session instead of letting it go unreachable.
+
+    This fires when the session has finished whatever it was doing. Its own work
+    is complete by now — what it must not do is go quiet, because a peer writing
+    two minutes from now would then reach nobody.
+    """
+    head = (
+        "Your work here is done, but this repo is on a live chat channel, so the "
+        "session stays reachable instead of going quiet. Call chat_wait now."
+    )
+    tail = (
+        "When it returns: answer anything addressed to you — for your own repo only, "
+        "never asserting what a peer's code does — then call chat_wait again. Keep "
+        "doing that. Peter does not have to prompt you to read your messages; that is "
+        "the entire point of this channel. To stop being reachable, leave the channel "
+        "with chat_channel_leave."
+    )
+    if not p:
+        return f"{head}\n{tail}"
+    return f"{head}\n{_summary(p)}\n{tail}"
+
+
+def _emit(out: dict) -> int:
+    print(json.dumps(out))
+    return 0
+
+
 def _stop_reason(p: dict) -> str:
     head = "Do not finish yet — a session in another repo is waiting on you."
     return (
@@ -214,9 +292,12 @@ def main() -> int:
     except json.JSONDecodeError:
         payload = {}
 
-    # A Stop hook that already fired must not fire again: no block loops.
-    if event == "Stop" and payload.get("stop_hook_active"):
-        return 0
+    # Deliberately NOT short-circuiting on stop_hook_active here. That guard
+    # retires the hook after one block, which is right for a one-off nag and
+    # fatal for a session that is supposed to stay reachable — it would go quiet
+    # on the second stop and the channel would be dead again. The escape is
+    # leaving the channel (or chat.always_live: false), not a fire-once rule.
+    stop_already_fired = bool(payload.get("stop_hook_active"))
 
     workspace = workspace_override or _workspace(payload)
 
@@ -227,6 +308,7 @@ def main() -> int:
     try:
         conn = _connect_ro(path)
         pending = _pending(conn, workspace)
+        live = _is_live(conn, _party(conn, workspace))
     except Exception:
         return 0  # never break a session
     finally:
@@ -236,13 +318,38 @@ def main() -> int:
             except Exception:
                 pass
 
+    if event == "Stop" and live:
+        # A seated session does not go quiet. Pending or not, it goes back to
+        # waiting — an empty inbox is precisely when it must wait, or a message
+        # arriving a minute from now reaches nobody.
+        return _emit({"decision": "block", "reason": _live_reason(pending)})
+
+    if event == "Stop" and stop_already_fired:
+        # Not seated: the one-off nag must still never recurse.
+        return 0
+
+    if event == "SessionStart" and live:
+        # A new session joins the conversation by itself. Without this the first
+        # thing every session needs is a human saying "go and listen".
+        return _emit({
+            "hookSpecificOutput": {
+                "hookEventName": event,
+                "additionalContext": (
+                    (_summary(pending) + "\n" if pending else "")
+                    + "This repo is on a live chat channel. When you have nothing else "
+                    "to do, call chat_wait and keep answering peers as they write — "
+                    "you do not need to be asked to read your messages."
+                ),
+            },
+            "suppressOutput": True,
+        })
+
     if not pending:
         return 0
 
     if event == "Stop":
-        # Hold the turn open only when a peer is actually waiting on this
-        # session. Housekeeping this session controls the timing of stays
-        # visible at session start and on every prompt, but never nags.
+        # Not seated in any channel: hold the turn open only when a peer is
+        # genuinely waiting on this session.
         if not pending.get("blocking"):
             return 0
         out = {"decision": "block", "reason": _stop_reason(pending)}
@@ -258,8 +365,7 @@ def main() -> int:
         print(_summary(pending))
         return 0
 
-    print(json.dumps(out))
-    return 0
+    return _emit(out)
 
 
 if __name__ == "__main__":

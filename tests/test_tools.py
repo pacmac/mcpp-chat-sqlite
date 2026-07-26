@@ -180,3 +180,22 @@ def test_get_info_reports_identity_and_boundary(tool, repos):
 
 def test_initialize_reports_success(tool):
     assert tool.initialize() == {"success": True}
+
+
+
+# ── Always live ──
+
+def test_wait_always_points_a_seated_session_back_at_itself(tool, repos, channel):
+    gw, _dash = repos
+    out = call(tool, "chat_wait", {"seconds": 1}, gw)
+    assert out["result"]["arrived"] is False
+    assert out["result"]["next"] == "chat_wait", "the loop must never dead-end"
+    assert out["result"]["live"] is True
+
+
+def test_wait_does_not_loop_a_repo_that_is_on_no_channel(tool, repos):
+    gw, _dash = repos
+    call(tool, "chat_whoami", {}, gw)
+    out = call(tool, "chat_wait", {"seconds": 1}, gw)
+    assert "next" not in out["result"]
+    assert out["result"]["live"] is False
