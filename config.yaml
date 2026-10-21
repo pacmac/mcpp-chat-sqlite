@@ -13,7 +13,7 @@ chat:
   # Sessions seated in an open channel stay reachable: on stopping they are
   # nudged once back into chat_wait and the loop is agent-driven from there.
   # Bounded by the stop_hook_active guard in hook.py — one nudge, never a trap.
-  always_live: true
+  always_live: false
   # Watchers can poll this one small file instead of the database. "" disables.
   tick_file: ".tick"
 

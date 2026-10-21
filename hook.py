@@ -327,12 +327,18 @@ def main() -> int:
             except Exception:
                 pass
 
-    if event == "Stop" and live:
-        # A seated session is asked once to go back to waiting rather than go
-        # quiet. Once — the guard above means the very next stop is honoured, so
-        # this can nudge but can never trap. Holding a session in the loop is
-        # not something a hook is able to do.
-        return _emit({"decision": "block", "reason": _live_reason(pending)})
+    # NOTHING HERE MAY EVER RETURN decision: "block".
+    #
+    # This module blocked Stop twice and wedged every session on the host twice
+    # (2026-07-26). The second time, the stop_hook_active guard — the first
+    # statement in this function, unconditional — did not fire, which means the
+    # harness does not reliably send that flag on a repeat stop. So there is no
+    # bound available to a Stop hook: a block can recur without limit and
+    # nothing in this process can stop it.
+    #
+    # A hook may therefore only ever *tell* a session something. Making a
+    # session act is not available, and pretending otherwise costs the user
+    # their whole host.
 
     if event == "SessionStart" and live:
         # A new session joins the conversation by itself. Without this the first
@@ -358,12 +364,13 @@ def main() -> int:
         return 0
 
     if event == "Stop":
-        # Not seated in any channel: hold the turn open only when a peer is
-        # genuinely waiting on this session.
-        if not pending.get("blocking"):
-            return 0
-        out = {"decision": "block", "reason": _stop_reason(pending)}
-    elif event in ("SessionStart", "UserPromptSubmit"):
+        # Stop is now report-only, for the same reason as above: an unbounded
+        # block is the one thing this module has proved it can do to a host.
+        # Reporting on Stop is pointless anyway — the turn ends regardless — so
+        # it stays silent and the summary is delivered at SessionStart and on
+        # every prompt instead.
+        return 0
+    if event in ("SessionStart", "UserPromptSubmit"):
         out = {
             "hookSpecificOutput": {
                 "hookEventName": event,
